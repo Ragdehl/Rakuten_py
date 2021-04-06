@@ -51,9 +51,3 @@ option = st.selectbox(
      df['first column'])
 
 'You selected: ', option
-
-option = st.sidebar.selectbox(
-    'Which number do you like best?',
-     df['first column'])
-
-'You selected:', option
