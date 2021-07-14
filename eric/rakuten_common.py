@@ -362,13 +362,8 @@ class RakutenBaseModel:
         self.prt("predict(): Fin\n")
         return y_pred
     
-    def save(self, nb=None):
+    def save(self, nb=0):
         """ Sauvegarde sur disque """
-        if not hasattr(self, 'fit_length') or self.fit_length == 0:
-            self.prt("Il n'y a rien à sauvegarder, fit n'a pas été exécuté)")
-            return None
-        if nb is None:
-            nb = self.fit_length
         filename = f"{self.name}_{nb}"
         fprefix = os.path.join(self.outdir, filename)
         if hasattr(self, "model") and hasattr(self.model, "save"):
@@ -401,6 +396,7 @@ class RakutenBaseModel:
         """ Cycle complet fit + predict + report + save """
         if samples_number == -1: # On prend tous le  jeu d'entrainement
             samples_number = len(get_y()) - off_train
+        self.prt(f"Evaluation avec {samples_number} échantillons")
         self.nb = samples_number # référence des enregistrements fichier
         off_end = off_train + samples_number
         t0 = time.time()
@@ -534,9 +530,9 @@ class RakutenCatModel(RakutenBaseModel):
     Le modelè doit instancier les sous modèles utilisés dans la méthode fit()
     en passant le numéro de référence nb (nombre d'échantillons utilisés)
     Par exemple:
-                self.objs = [ TextEmbed1(self.fit_length),
-                              ImageXXXX(self.fit_length),
-                              RNNTruc(self.fit_length)
+                self.objs = [ TextEmbed1(self.nb),
+                              ImageXXXX(self.nb),
+                              RNNTruc(self.nb)
                             ]
      Cela correspond à initialiser ces sous modèles avec leurs sauvegardes
      créés lors de leurs exécutions antérieures.
