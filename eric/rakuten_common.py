@@ -320,20 +320,26 @@ class RakutenBaseModel:
         self.layer_index += 1
         return f"{s}_{self.layer_index}_{self.name}"
 
-    def compile_and_train_gen(self, X_train, y_train, X_val, y_val,
-                              optimizer='adam',
-                              epochs=10,
-                              patience_stop=2, patience_lr=None,
-                              class_weight=[],
-                              callbacks=[]):
+    def __compile_and_train(self,
+                            X_train, y_train, X_val, y_val,
+                            trainds, valds,
+                            optimizer='adam',
+                            epochs=10,
+                            patience_stop=2, # patience pour early stop
+                            patience_lr=10,  # patience pour learning rate
+                            class_weight=[],
+                            callbacks=[]):
+        """ Fonction interne qui prend les données sous 2 formes possibles:
+            - X_train, y_train, X_val, y_val (dans ce cas trainds = valds = None)
+            - trainds, valds
+        """
         self.prt("fit(): Début")
         callbacks = [tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=patience_stop,
                                              restore_best_weights=True, verbose=1),
                      tf.keras.callbacks.ModelCheckpoint(filepath=self.fbestweights,
                                              save_weights_only=True, save_best_only=True,
-                                              monitor='val_loss', mode='min')]
-        if patience_lr is not None:
-            callbacks += [tf.keras.callbacks.ReduceLROnPlateau(
+                                              monitor='val_loss', mode='min'),
+                     tf.keras.callbacks.ReduceLROnPlateau(
                                 monitor='val_loss', factor=0.1, patience=patience_lr, verbose=1)]
 
         if os.path.isfile(self.fbestweights):
@@ -341,26 +347,61 @@ class RakutenBaseModel:
         self.model.compile(optimizer=optimizer,
                            loss='sparse_categorical_crossentropy',
                            metrics = ['accuracy'])
-        history = self.model.fit(X_train, y_train,
-                                 epochs = epochs,
-#                                steps_per_epoch = traingen.n//traingen.batch_size,
-                                validation_data = (X_val, y_val),
-#                                validation_steps = valgen.n//valgen.batch_size,
-                                callbacks = callbacks, class_weight = class_weight)
+        if X_train is None: # dans ce cas y_train, X_val et y_val sont None aussi
+            history = self.model.fit(trainds,
+                                     epochs = epochs,
+                                     validation_data = valds,
+                                     callbacks = callbacks, class_weight = class_weight)
+        else: 
+            history = self.model.fit(X_train, y_train,
+                                     epochs = epochs,
+                                     validation_data = (X_val, y_val),
+                                     callbacks = callbacks, class_weight = class_weight)
+            
         if os.path.isfile(self.fbestweights):
             self.model.load_weights(self.fbestweights)
         plot_history(f"{self.name}", history)
         self.prt("fit(): Fin\n")
         return history
+
+    def compile_and_train_gen(self,
+                             X_train, y_train, X_val, y_val,
+                             optimizer='adam',
+                             epochs=10,
+                             patience_stop=2,
+                             patience_lr=10,
+                             class_weight=[],
+                             callbacks=[]):
+        return self.__compile_and_train(X_train, y_train, X_val, y_val,
+                                        None, None,
+                                        optimizer, epochs,
+                                        patience_stop, patience_lr,
+                                        class_weight, callbacks)
+
+    def compile_and_train_dataset(self,
+                             trainds, valds,
+                             optimizer='adam',
+                             epochs=10,
+                             patience_stop=2,
+                             patience_lr=10,
+                             class_weight=[],
+                             callbacks=[]):
+        return self.__compile_and_train(None, None, None, None,
+                                        trainds, valds,
+                                        optimizer, epochs,
+                                        patience_stop, patience_lr,
+                                        class_weight, callbacks)
         
-    def predict(self, off_start, off_end, input_file=None):
-        X_test = self.preprocess_X_test(off_start, off_end, input_file)
-         
+    def model_predict(self, X_test):
         self.prt("predict(): Début")
         softmaxout = self.model.predict(X_test, verbose = 1)
         y_pred = [self.fit_labels[i] for i in np.argmax(softmaxout, axis=1)]
         self.prt("predict(): Fin\n")
         return y_pred
+
+    def predict(self, off_start, off_end, input_file=None):
+        X_test = self.preprocess_X_test(off_start, off_end, input_file)
+        return self.predict(X_test)
     
     def save(self, nb=0):
         """ Sauvegarde sur disque """
