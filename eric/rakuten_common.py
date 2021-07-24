@@ -62,6 +62,17 @@ OUTDIR = "modele_rakuten_out"
 MULTILINGUAL_DIR = "tfhub/universal-sentence-encoder-multilingual-large-3"
 MULTILINGUAL_LINK = "https://tfhub.dev/google/universal-sentence-encoder-multilingual-large/3"
 
+# Ménage de vieux fichiers
+filestoremove = []
+for f in os.listdir(OUTDIR):
+    r = re.match(r'^TextOneHot_([^_]*).*$', f)
+    if r and r.group(1) in ['train', 'val', 'test']:
+        filestoremove.append(os.path.join(OUTDIR, f))
+if 0 < len(filestoremove):
+    print("Nettoyage de vieux fichiers...")
+    for f in tqdm.tqdm(filestoremove):
+        os.remove(f)
+
 def init_OUTDIR():
     """ 
     Initialise le répertoire où seront générés les fichiers.
@@ -272,6 +283,8 @@ class RakutenBaseModel:
         self.fbestweights = os.path.join(self.outdir,
                                          self.name + '_bestweights.hdf5')
         if nb is not None:
+            if nb == -1: # On prend tous le  jeu d'entrainement
+                nb = len(get_y())
             fprefix = os.path.join(self.outdir, f"{self.name}_{nb}")
             objectfile = fprefix + "_object.pkl"
             modelfile = fprefix + "_model.hdf5"
@@ -296,7 +309,7 @@ class RakutenBaseModel:
         self.journal += s + '\n'
         print(s)
 
-    def report(self, y_test=None, y_pred=None):
+    def report(self, y_test, y_pred):
         """ Affiche un rapport """
         score = round(f1_score(y_test, y_pred, average='weighted'), 4)
         self.prt(f'w-f1-score = \033[1m{score}\033[0m\n')
@@ -346,6 +359,7 @@ class RakutenBaseModel:
             os.remove(self.fbestweights)
         self.model.compile(optimizer=optimizer,
                            loss='sparse_categorical_crossentropy',
+ #                          loss=tfa.losses.WeightedKappaLoss,
                            metrics = ['accuracy'])
         if X_train is None: # dans ce cas y_train, X_val et y_val sont None aussi
             history = self.model.fit(trainds,
@@ -401,7 +415,7 @@ class RakutenBaseModel:
 
     def predict(self, off_start, off_end, input_file=None):
         X_test = self.preprocess_X_test(off_start, off_end, input_file)
-        return self.predict(X_test)
+        return self.model_predict(X_test)
     
     def save(self, nb=0):
         """ Sauvegarde sur disque """
@@ -429,41 +443,63 @@ class RakutenBaseModel:
         pickle.dump(self, open(f, 'wb'))
         self.prt(f"Objet complet sauvegardé dans {f}")
         return f
-    
+ 
+    def bad_predictions(self):
+        """
+        Création d'un fichier csv qui contient les mauvaises prédictions
+        """
+        texts = get_X_text()
+        images = get_X_image_path()
+        l = [i for i in range(len(self.y_test)) \
+             if self.y_test[i] != self.y_pred[i]]
+        if len(l) > 0:
+            dico = {'y_test':[], 'y_pred': [], 'text': [], 'image':[]}
+            for i in l:
+                dico['y_test'].append(self.y_test[i])
+                dico['y_pred'].append(self.y_pred[i])
+                dico['text'].append(texts[self.off_test + i])
+                dico['image'].append(images[self.off_test + i])
+            df = pd.DataFrame(dico).sort_values('y_test')
+            f = os.path.join(OUTDIR,
+                             f"{self.name}_{self.nb}_bad_predictions.csv")
+            self.prt(f"{len(l)} mauvaises prédictions: {f}")
+            df.to_csv(f, index=False)
+   
     def evaluate(self, samples_number=-1,
                  test_size=TEST_SIZE,
                  val_split=VALIDATION_SPLIT,
                  off_train=0):
         """ Cycle complet fit + predict + report + save """
         if samples_number == -1: # On prend tous le  jeu d'entrainement
-            samples_number = len(get_y()) - off_train
+            samples_number = len(get_y())
         self.prt(f"Evaluation avec {samples_number} échantillons")
         self.nb = samples_number # référence des enregistrements fichier
         off_end = off_train + samples_number
         t0 = time.time()
+
         off_test = off_train + int(samples_number * (1 - test_size))
         off_val = off_train + int((off_test - off_train) * (1 - val_split))
         self.fit(off_train, off_val, off_test)
+        
         y_test = get_y()[off_test : off_end]
         y_pred = self.predict(off_test, off_end)
+        
         self.report(y_test, y_pred)
-        t = int(time.time() - t0)
-        self.prt(f"Evaluation exécutée en {t} secondes")
+
+        self.off_train = off_train
+        self.off_val = off_val
+        self.off_test = off_test
+        self.off_end = off_end
+        self.y_test = list(y_test)
+        self.y_pred = list(y_pred)
+        
+        self.bad_predictions()
+
+        t = int((time.time() - t0)/60)
+        h = int(t/60)
+        m = int(t - h*60)
+        self.prt(f"Evaluation exécutée en {h}h{m}mn")
         self.save(self.nb)
-    
-    def create_final_model(self):
-        """ Création du modèle """
-        t0 = time.time()
-        nb = len(get_y())
-        self.fit(0, nb)
-        self.save()
-        df = pd.read_csv(X_TEST_CSV_FILE)
-        y_pred = self.predict(0, df.shape[0], input_file=X_TEST_CSV_FILE)
-        df['prdtypecode'] = y_pred
-        csvfile = os.path.join(self.outdir, f"test_update_{self.name}.csv")
-        df.to_csv(csvfile)
-        t = int(time.time() - t0)
-        self.prt(f"{csvfile} crée en {t} secondes")
 
 
 class CatDataset(tf.keras.utils.Sequence):
@@ -654,3 +690,41 @@ class RakutenCatModel(RakutenBaseModel):
         y_pred = [self.fit_labels[i] for i in np.argmax(softmaxout, axis=1)]
         self.prt("predict(): Fin\n")
         return y_pred
+    
+    def predict_official(self, csvfile):
+        """
+        Prédiction avec les données de tests officielles
+        """
+        self.prt("Prédiction sur les données de test officielles")
+        df = pd.read_csv(X_TEST_CSV_FILE)
+        y_pred = self.predict(0, df.shape[0], input_file=X_TEST_CSV_FILE)
+        df['prdtypecode'] = y_pred
+        df.to_csv(csvfile)
+        self.prt(f"Création de \033[1m{csvfile}\033[0m")
+
+    def deliver(self):
+        """
+        Archivage du modèle et des prédictions officielles dans le
+        sous répertoire liv
+        """
+        t = datetime.datetime.now().strftime("%Y_%m_%d_%Hh%M")
+        livdir = os.path.join(OUTDIR, "liv", t)
+        os.makedirs(livdir)
+        filelist = []
+        for f in os.listdir(OUTDIR):
+            if re.match(r'\S+_' + str(self.nb) + '_object.pkl', f) or \
+               re.match(r'\S+_' + str(self.nb) + '_model.hdf5', f):
+                filelist.append(f)
+        if len(filelist) < 2:
+            self.prt("Rien à sauvegarder")
+            return
+        self.prt(f"Sauvegarde des modèles dans {livdir}")
+        for f in filelist:
+            inf = os.path.join(OUTDIR, f)
+            outf = os.path.join(livdir, f)
+            print(f"   {outf}")
+            with open('outf', 'wb') as fo:
+                with open(inf, 'rb') as fi:
+                    fo.write(fi.read())
+        f = os.path.join(livdir, "test_update_predicted.csv")
+        self.predict_official(f)
