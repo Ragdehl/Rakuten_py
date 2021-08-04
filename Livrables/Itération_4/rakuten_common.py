@@ -93,7 +93,7 @@ def init_OUTDIR():
 def image_path(row, subdir):
         f = "image_%d_product_%d.jpg" % (row.imageid, row.productid) 
         ff = os.path.join(os.getcwd(), "images", subdir, f)
-        return ff if os.path.isfile(ff) else None
+        return ff.astype(str)
     
 def get_y():
     """ Retourne les y (cibles) """
@@ -535,55 +535,65 @@ class CatDataset(tf.keras.utils.Sequence):
         """ Fichier contenant les data du batch <index> """
         return os.path.join(self.dir, f"batch_{index}.npy")
 
-    def __init__(self, name, batch_size, objs,
-                 Xs, y=None, shuffle=False):
+    def __init__(self, name, batch_size, nb, objs,
+                 Xs, y=None, shuffle=False, nobuild=False):
         """
         name:       nom du partitionnement
+        input_num:  nombre d'échantillons
         batch_size: taille des batchs
         objs:       liste des instances associées à chaque sous-modèle
         Xs:         liste des données pré-processées de chaque sous modèle
         y:          liste globale des targets, ou None
         shuffle:    mélange des batchs à chaque époque
+        nobuild:    booléen pour ne pas reconstruire les fichiers (permet
+                    de faire des essais plus rapidement, à n'utiliser que
+                    si les modèles de base ne change pas)
         """
-        nb = len(Xs[0])
         self.y = y
         self.batch_size = batch_size
-        self.input_number = len(Xs)
+        self.input_number = len(objs)
         self.batch_number = int(nb / batch_size)
         self.batch_indexes = range(self.batch_number)
-        if shuffle:
-            self.batch_indexes = sklearn.utils.shuffle(self.batch_indexes, random_state=1997)
         self.shuffle = shuffle
-
-        self.dir = os.path.join(OUTDIR, f"{self.__class__.__name__}_{name}_{nb}")
+        self.dir = os.path.join(OUTDIR,
+                                f"{self.__class__.__name__}_{name}_{nb}")
         if not os.path.isdir(self.dir):
             os.makedirs(self.dir)
+        if nobuild:
+            print(f"Réutilisation de {self.dir}")
         else:
+            print(f"Mélange des données")
+            if shuffle:
+                self.batch_indexes = sklearn.utils.shuffle(self.batch_indexes,
+                                                           random_state=1997)
+                for i in range(self.input_number):
+                    Xs[i] = sklearn.utils.shuffle(Xs[i], random_state=1998)
+                if self.y is not None:
+                    self.y = sklearn.utils.shuffle(self.y, random_state=1998)
             print(f"Nettoyage de {self.dir}")
             for f in os.listdir(self.dir):
                 os.remove(os.path.join(self.dir, f))
-
-        print(f"Création de {self.batch_number} fichiers de batch dans {self.dir}")
-        for i, X in enumerate(Xs):
-            print(f"* modèle {objs[i].name}")
-            isfile = type(X[0]) == str and os.path.isfile(X[0])
-            for index in tqdm.tqdm(range(self.batch_number)):
-                if not isfile:
-                    X_batch = X[index*batch_size:(index+1)*batch_size, ...]
-                else:
-                    # Si ce sont des fichiers (images) on utilise la méthode
-                    # du modèle pour les lire dans le bon format
-                    X_batch = X[index*batch_size:(index+1)*batch_size]
-                    imgs = list()
-                    for f in X_batch:
-                        img = objs[i].data_from_file(f)
-                        imgs.append(img)
-                    X_batch = np.array(imgs)
-                batchfile = self.__batch_filepath(index)
-                # Ouverture (création si besoin) du fichier de batch <index> et
-                # écriture des données de type "X" à la suite des autres
-                with open(batchfile, 'a+b') as f:
-                    np.save(f, X_batch)
+            print(f"Création de {self.batch_number} fichiers dans {self.dir}")
+            for i, X in enumerate(Xs):
+                print(f"* modèle {objs[i].name}")
+                isfile = type(X[0]) == str and os.path.isfile(X[0])
+                for index in tqdm.tqdm(range(self.batch_number)):
+                    if not isfile:
+                        X_batch = X[index*batch_size:(index+1)*batch_size, ...]
+                    else:
+                        # Si ce sont des fichiers (images) on utilise la méthode
+                        # du modèle pour les lire dans le bon format
+                        X_batch = X[index*batch_size:(index+1)*batch_size]
+                        imgs = list()
+                        for f in X_batch:
+                            img = objs[i].data_from_file(f)
+                            imgs.append(img)
+                        X_batch = np.array(imgs)
+                    batchfile = self.__batch_filepath(index)
+                    # Ouverture (création si besoin) du fichier de batch <index>
+                    # et écriture des données de type "X" à la suite des autres
+                    with open(batchfile, 'a+b') as f:
+                        np.save(f, X_batch)
 
     def __len__(self):
         """ Retourne le nombre de batchs """
@@ -635,47 +645,51 @@ class RakutenCatModel(RakutenBaseModel):
      - les poids de ses layers entrainés
 
     """
-    def __init__(self, name, nb=None):
+    def __init__(self, name, nb=None, nobuild=False):
         super().__init__(name, nb)
+        self.nobuild = nobuild # Pour la mise au point du modèle 
 
-    def create_train_generators(self, off_start, off_val, off_end, input_file=None):
+    def create_train_generators(self, off_start, off_val, off_end,
+                                input_file=None):
         """
         Création des générateurs de data pour l'entrainement et sa validation
         (a valeur de self.validation_split est utilisée pour les partitionner)
         """
-        length = off_end - off_start
-        self.prt(f"Preprocessing des {length} données d'entrainement")
-        X_train = []
-        for obj in self.objs:
-            X = obj.preprocess_X_train(off_start, off_val, input_file)
-#            X = sklearn.utils.shuffle(X, random_state=2021)
-            X_train.append(X)
+        self.prt(f"Preprocessing des données d'entrainement et validation")
+        X_train, X_val = [], []
+        if not self.nobuild:
+            for obj in self.objs:
+                X = obj.preprocess_X_train(off_start, off_val, input_file)
+                X_train.append(X)
+            for obj in self.objs:
+                X = obj.preprocess_X_test(off_val, off_end, input_file)
+                X_val.append(X)
         y_train = self.preprocess_y_train(off_start, off_val, input_file)
-        X_val = []
-        for obj in self.objs:
-            X = obj.preprocess_X_test(off_val, off_end, input_file)
-#            X = sklearn.utils.shuffle(X, random_state=2021)
-            X_val.append(X)
         y_val = self.preprocess_y_train(off_val, off_end, input_file)
-#        y_train = sklearn.utils.shuffle(y_train, random_state=2021)
         
-        self.prt(f"Instantiation des générateurs d'entrainement")
-        traingen = CatDataset("train", self.batch_size, self.objs,
-                              X_train, y_train, shuffle=True)
-        valgen = CatDataset("val", self.batch_size, self.objs,
-                            X_val, y_val, shuffle=True)
+        self.prt(f"Instantiation du générateur d'entrainement")
+        traingen = CatDataset("train", self.batch_size, off_val - off_start,
+                              self.objs, X_train, y_train,
+                              shuffle=True, nobuild=self.nobuild)
+        self.prt(f"Instantiation du générateur de validation")
+        valgen = CatDataset("val", self.batch_size, off_end - off_val,
+                            self.objs, X_val, y_val,
+                            shuffle=True, nobuild=self.nobuild)
         return traingen, valgen
 
-    def create_test_generator(self, off_start, off_end, input_file=None):
+    def create_test_generator(self, off_start, off_end,
+                              input_file=None):
         """ Création du générateur des data de test """
-        self.prt(f"Preprocessing des données de test")
-        X_test = []
-        for obj in self.objs:
-            X_test.append(obj.preprocess_X_test(off_start, off_end, input_file))
         length = off_end - off_start
+        X_test = []
+        if not self.nobuild:
+            self.prt(f"Preprocessing des {length} données de test")
+            for obj in self.objs:
+                X_test.append(obj.preprocess_X_test(off_start, off_end, input_file))
 
         self.prt(f"Instantiation du générateur de test")
-        testgen = CatDataset("test", 1, self.objs, X_test)
+        testgen = CatDataset("test", 1, length, self.objs, X_test,
+                             nobuild=self.nobuild)
         return testgen
 
     def copy_submodels_weights(self):
