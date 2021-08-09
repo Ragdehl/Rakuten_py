@@ -9,7 +9,6 @@ import datetime
 import hashlib
 import inspect
 import pickle
-import wget
 import gzip
 import time
 import tqdm
@@ -93,7 +92,7 @@ def init_OUTDIR():
 def image_path(row, subdir):
         f = "image_%d_product_%d.jpg" % (row.imageid, row.productid) 
         ff = os.path.join(os.getcwd(), "images", subdir, f)
-        return ff.astype(str)
+        return ff
     
 def get_y():
     """ Retourne les y (cibles) """
@@ -561,9 +560,9 @@ class CatDataset(tf.keras.utils.Sequence):
             os.makedirs(self.dir)
         if nobuild:
             print(f"Réutilisation de {self.dir}")
-        else:
-            print(f"Mélange des données")
+        else:  
             if shuffle:
+                print(f"Mélange des données")
                 self.batch_indexes = sklearn.utils.shuffle(self.batch_indexes,
                                                            random_state=1997)
                 for i in range(self.input_number):
