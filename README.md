@@ -12,7 +12,7 @@ Le projet suivait un plan en plusieurs étapes :
 * Chargement et première exploration des données, visualisation et analyses statistiques.
 * Modélisation de différents algoritmes de classification de texte comme, linear SVC, logistic régression, KNN.
 * Modélisation d’algorithmes de  réduction de dimensions PCA pour la classification d'images.
-* Modélisation d'algorithmes Deep Learning:
+* Modélisation d'algorithmes Deep Learning avec TensorFlow:
   * Réseau de neurones convolutifs (ConvNet) pour la classification d'images,
   * Réseaux de neurones récurrents (RNN) pour la classification de texte.
   * Concatenation des meilleurs modèles textuels et des modèles images
